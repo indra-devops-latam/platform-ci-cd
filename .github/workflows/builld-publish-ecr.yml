@@ -1,0 +1,155 @@
+name: Reusable Microservice CI/CD
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        description: "Nombre del microservicio"
+        required: true
+        type: string
+      chart_path:
+        description: "Ruta del Helm chart dentro del repositorio"
+        required: true
+        type: string
+      helm_release:
+        description: "Nombre del release Helm"
+        required: true
+        type: string
+      namespace_dev:
+        required: true
+        type: string
+      namespace_prod:
+        required: true
+        type: string
+      aws_region:
+        required: true
+        type: string
+      ecr_repository_dev:
+        required: true
+        type: string
+      ecr_repository_prod:
+        required: true
+        type: string
+      eks_cluster_dev:
+        required: true
+        type: string
+      eks_cluster_prod:
+        required: true
+        type: string
+      deploy:
+        description: "Publicar y desplegar si es true"
+        required: true
+        type: boolean
+
+    secrets:
+      AWS_ROLE_ARN:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate image
+    if: ${{ !inputs.deploy }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image without publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: local/${{ inputs.service_name }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  publish-and-deploy:
+    name: Publish to ECR and deploy to EKS
+    if: ${{ inputs.deploy }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve target environment
+        id: target
+        shell: bash
+        run: |
+          case "$GITHUB_REF_NAME" in
+            develop)
+              echo "environment=dev" >> "$GITHUB_OUTPUT"
+              echo "ecr_repository=${{ inputs.ecr_repository_dev }}" >> "$GITHUB_OUTPUT"
+              echo "cluster=${{ inputs.eks_cluster_dev }}" >> "$GITHUB_OUTPUT"
+              echo "namespace=${{ inputs.namespace_dev }}" >> "$GITHUB_OUTPUT"
+              ;;
+            main)
+              echo "environment=prod" >> "$GITHUB_OUTPUT"
+              echo "ecr_repository=${{ inputs.ecr_repository_prod }}" >> "$GITHUB_OUTPUT"
+              echo "cluster=${{ inputs.eks_cluster_prod }}" >> "$GITHUB_OUTPUT"
+              echo "namespace=${{ inputs.namespace_prod }}" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Unsupported branch: $GITHUB_REF_NAME"
+              exit 1
+              ;;
+          esac
+
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.ecr.outputs.registry }}/${{ steps.target.outputs.ecr_repository }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+
+      - name: Configure kubectl for EKS
+        shell: bash
+        run: |
+          aws eks update-kubeconfig \
+            --region "${{ inputs.aws_region }}" \
+            --name "${{ steps.target.outputs.cluster }}"
+
+      - name: Deploy with Helm
+        shell: bash
+        run: |
+          helm upgrade --install \
+            "${{ inputs.helm_release }}" \
+            "${{ inputs.chart_path }}" \
+            --namespace "${{ steps.target.outputs.namespace }}" \
+            --create-namespace \
+            --set-string image.repository="${{ steps.ecr.outputs.registry }}/${{ steps.target.outputs.ecr_repository }}" \
+            --set-string image.tag="${GITHUB_SHA}" \
+            --wait \
+            --timeout 5m
