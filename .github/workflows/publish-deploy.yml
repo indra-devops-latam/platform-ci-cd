@@ -94,7 +94,7 @@ jobs:
         with:
           context: .
           push: true
-          tags: ${{ steps.ecr.outputs.registry }}/${{ inputs.ecr_repository }}-${{ inputs.environment }}:${{ github.sha }}
+          tags: ${{ steps.ecr.outputs.registry }}/${{ inputs.ecr_repository }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -106,7 +106,7 @@ jobs:
       - name: Configure kubectl for EKS
         env:
           AWS_REGION: ${{ inputs.aws_region }}
-          EKS_CLUSTER: ${{ inputs.eks_cluster }}-${{ inputs.environment }}
+          EKS_CLUSTER: ${{ inputs.eks_cluster }}
         shell: bash
         run: |
           aws eks update-kubeconfig \
@@ -118,7 +118,7 @@ jobs:
           HELM_RELEASE: ${{ inputs.helm_release }}
           CHART_PATH: ${{ inputs.chart_path }}
           K8S_NAMESPACE: ${{ inputs.namespace }}
-          IMAGE_REPOSITORY: ${{ steps.ecr.outputs.registry }}/${{ inputs.ecr_repository }}-${{ inputs.environment }}
+          IMAGE_REPOSITORY: ${{ steps.ecr.outputs.registry }}/${{ inputs.ecr_repository }}
           IMAGE_TAG: ${{ github.sha }}
         shell: bash
         run: |
