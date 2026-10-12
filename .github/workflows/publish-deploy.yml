@@ -111,6 +111,14 @@ jobs:
             --region "$AWS_REGION" \
             --name "$EKS_CLUSTER"
 
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      - name: Verify Kubernetes access
+        run: |
+          kubectl config current-context
+          kubectl get nodes
+
       - name: Deploy with Helm
         env:
           HELM_RELEASE: ${{ inputs.helm_release }}
