@@ -1,0 +1,133 @@
+name: Reusable Publish and Deploy
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "GitHub Environment: dev o prod"
+        required: true
+        type: string
+      aws_region:
+        required: true
+        type: string
+      ecr_repository:
+        description: "Nombre del repositorio ECR, sin el registry"
+        required: true
+        type: string
+      eks_cluster:
+        required: true
+        type: string
+      namespace:
+        required: true
+        type: string
+      helm_release:
+        required: true
+        type: string
+      chart_path:
+        description: "Ruta al chart Helm en el repositorio del servicio"
+        required: true
+        type: string
+      deploy:
+        description: "Publicar y desplegar si es true"
+        required: true
+        type: boolean
+
+    secrets:
+      AWS_ROLE_ARN:
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Validate image
+    if: ${{ !inputs.deploy }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Docker image without publishing
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          tags: local/${{ inputs.service_name }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  publish-and-deploy:
+    name: Publish image and deploy to ${{ inputs.environment }}
+    if: ${{ inputs.deploy }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      # El checkout usa el repositorio y commit que llamó a este workflow.
+      - name: Checkout service repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials using OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ inputs.aws_region }}
+
+      - name: Login to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.ecr.outputs.registry }}/${{ inputs.ecr_repository }}-${{ inputs.environment }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+
+      - name: Configure kubectl for EKS
+        env:
+          AWS_REGION: ${{ inputs.aws_region }}
+          EKS_CLUSTER: ${{ inputs.eks_cluster }}-${{ inputs.environment }}
+        shell: bash
+        run: |
+          aws eks update-kubeconfig \
+            --region "$AWS_REGION" \
+            --name "$EKS_CLUSTER"
+
+      - name: Deploy with Helm
+        env:
+          HELM_RELEASE: ${{ inputs.helm_release }}
+          CHART_PATH: ${{ inputs.chart_path }}
+          K8S_NAMESPACE: ${{ inputs.namespace }}
+          IMAGE_REPOSITORY: ${{ steps.ecr.outputs.registry }}/${{ inputs.ecr_repository }}-${{ inputs.environment }}
+          IMAGE_TAG: ${{ github.sha }}
+        shell: bash
+        run: |
+          helm upgrade --install \
+            "$HELM_RELEASE" \
+            "$CHART_PATH" \
+            --namespace "$K8S_NAMESPACE" \
+            --create-namespace \
+            --set-string image.repository="$IMAGE_REPOSITORY" \
+            --set-string image.tag="$IMAGE_TAG" \
+            --wait \
+            --timeout 5m
