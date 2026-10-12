@@ -32,10 +32,6 @@ on:
         required: true
         type: boolean
 
-    secrets:
-      AWS_ROLE_ARN:
-        required: true
-
 permissions:
   contents: read
 
@@ -77,7 +73,7 @@ jobs:
       - name: Checkout service repository
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials using OIDC
+      - name: Configure AWS Credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
