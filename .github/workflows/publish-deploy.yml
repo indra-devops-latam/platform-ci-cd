@@ -111,13 +111,13 @@ jobs:
             --region "$AWS_REGION" \
             --name "$EKS_CLUSTER"
 
-      - name: Verify AWS identity
-        run: aws sts get-caller-identity
+      # - name: Verify AWS identity
+      #   run: aws sts get-caller-identity
 
-      - name: Verify Kubernetes access
-        run: |
-          kubectl config current-context
-          kubectl get nodes
+      # - name: Verify Kubernetes access
+      #   run: |
+      #     kubectl config current-context
+      #     kubectl get nodes
 
       - name: Deploy with Helm
         env:
@@ -137,3 +137,17 @@ jobs:
             --set-string image.tag="$IMAGE_TAG" \
             --wait \
             --timeout 5m
+
+      - name: Diagnose deployment
+        if: failure()
+        continue-on-error: true
+        run: |
+          kubectl get pods -n "$K8S_NAMESPACE" -o wide
+          kubectl describe deployment "$HELM_RELEASE" \
+            -n "$K8S_NAMESPACE"
+          kubectl get events -n "$K8S_NAMESPACE" \
+            --sort-by='.lastTimestamp'
+          kubectl logs deployment/"$HELM_RELEASE" \
+            -n "$K8S_NAMESPACE" \
+            --all-containers=true \
+            --tail=100
