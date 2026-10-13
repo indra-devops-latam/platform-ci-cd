@@ -123,6 +123,7 @@ jobs:
         env:
           HELM_RELEASE: ${{ inputs.helm_release }}
           CHART_PATH: ${{ inputs.chart_path }}
+          FILE_VALUES: ${{ inputs.chart_path }}/values-${{ inputs.environment }}.yaml
           K8S_NAMESPACE: ${{ inputs.namespace }}
           IMAGE_REPOSITORY: ${{ steps.ecr.outputs.registry }}/${{ inputs.ecr_repository }}
           IMAGE_TAG: ${{ github.sha }}
@@ -133,6 +134,7 @@ jobs:
             "$CHART_PATH" \
             --namespace "$K8S_NAMESPACE" \
             --create-namespace \
+            -f "$FILE_VALUES" \
             --set-string image.repository="$IMAGE_REPOSITORY" \
             --set-string image.tag="$IMAGE_TAG" \
             --wait \
